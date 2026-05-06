@@ -1,64 +1,276 @@
-import kagglehub
 import pandas as pd
-import os
-import json
-import shutil
 
-# 1. Configuration for Leicester 2015/16
-'''comp_id = 2  # Premier League
-season_id = 27 
-dataset_handle = "saurabhshahane/statsbomb-football-data"
+def getMatchData():
+    path = "../data/raw/"
+    seasons = [
+        '2000-01','2001-02','2002-03','2003-04','2004-05','2005-06',
+        '2006-07','2007-08','2008-09','2009-10','2010-11','2011-12',
+        '2012-13','2013-14','2014-15','2015-16','2016-17','2017-18',
+        '2018-19','2020-2021','2021-2022'
+    ]
+    drop_cols = ['AvgC<2.5', 'AHCh', 'B365CAHH', 'B365CAHA', 'PCAHH', 'PCAHA', 'MaxCAHH', 'MaxCAHA', 'AvgCAHH', 'AvgCAHA','AvgCH', 'AvgCD', 'AvgCA', 'B365C>2.5', 'B365C<2.5', 'PC>2.5', 'PC<2.5', 'MaxC>2.5', 'MaxC<2.5', 'AvgC>2.5','IWCA', 'WHCH', 'WHCD', 'WHCA', 'VCCH', 'VCCD', 'VCCA', 'MaxCH', 'MaxCD', 'MaxCA', 'AvgAHH', 'AvgAHA', 'B365CH', 'B365CD', 'B365CA', 'BWCH', 'BWCD', 'BWCA', 'IWCH', 'IWCD','Max<2.5', 'Avg>2.5', 'Avg<2.5', 'AHh', 'B365AHH', 'B365AHA', 'PAHH', 'PAHA', 'MaxAHH', 'MaxAHA','B365H', 'B365D', 'B365A', 'BWH', 'BWD', 'BWA', 'GBH', 'GBD', 'GBA', 'IWH', 'IWD', 'IWA', 'LBH', 'LBD', 'LBA', 'SBH', 'SBD', 'SBA', 'WHH', 'WHD', 'WHA', 'SJH', 'SJD', 'SJA', 'VCH', 'VCD', 'VCA', 'BSH', 'BSD', 'BSA', 'Bb1X2', 'BbMxH', 'BbAvH', 'BbMxD', 'BbAvD', 'BbMxA', 'BbAvA', 'BbOU', 'BbMx>2.5', 'BbAv>2.5', 'BbMx<2.5', 'BbAv<2.5', 'BbAH', 'BbAHh', 'BbMxAHH', 'BbAvAHH', 'BbMxAHA', 'BbAvAHA', 'PSH', 'PSD', 'PSA', 'PSCH', 'PSCD', 'PSCA', 'Time', 'MaxH', 'MaxD', 'MaxA', 'AvgH', 'AvgD', 'AvgA', 'B365>2.5', 'B365<2.5', 'P>2.5', 'P<2.5', 'Max>2.5','Season','Div','HTHG', 'HTAG','HTR','Referee','HST','AST','AHW','HHW','Attendance']
 
-# 2. Get the match list first
-match_file_path = f"data/matches/{comp_id}/{season_id}.json"
-local_match_path = kagglehub.dataset_download(dataset_handle, path=match_file_path)
-all_matches = pd.read_json(local_match_path)
+    frames = []
 
-# 3. Filter correctly for Leicester City
-leicester_matches = all_matches[
-    (all_matches['home_team'].str.get('home_team_name') == 'Leicester City') | 
-    (all_matches['away_team'].str.get('away_team_name') == 'Leicester City')
-].copy()
+    # ---------------------------
+    # 1. LOAD DATA
+    # ---------------------------
+    for season in seasons:
+        try:
+            curr_df = pd.read_csv(f"{path}{season}.csv")
+            curr_df["Season"] = season
+            frames.append(curr_df)
+        except FileNotFoundError:
+            print(f"Missing: {season}")
 
-# 4. Fetch "Form" data for each match
-# Let's get the first 5 matches as a test to avoid over-requesting
-match_ids = leicester_matches['match_id'].tolist()
-all_events_list = []
+    if not frames:
+        return pd.DataFrame()
 
-print(f"Extracting form data for {len(match_ids)} matches...")
+    df = pd.concat(frames, ignore_index=True)
+    df = df.copy()  # defragment
 
-for m_id in match_ids[:]: # Testing with 5 matches
-    # Path to the specific event file (see image_96c518.png structure)
-    event_path = f"data/events/{m_id}.json"
-    
-    # Surgical download of just this match's events
-    local_event_path = kagglehub.dataset_download(dataset_handle, path=event_path)
-    
-    with open(local_event_path, 'r') as f:
-        data = json.load(f)
-        # Flatten the nested JSON (e.g., 'shot' -> 'shot.statsbomb_xg')
-        df_temp = pd.json_normalize(data)
-        df_temp['match_id'] = m_id # Keep track of which match this is
-        all_events_list.append(df_temp)
+    # ---------------------------
+    # 2. PARSE DATE & SORT CHRONOLOGICALLY
+    # ---------------------------
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+    df = df.sort_values("Date").reset_index(drop=True)
 
-# Combine into one massive 'form' DataFrame
-leicester_form_data = pd.concat(all_events_list, ignore_index=True)
+    # ---------------------------
+    # 3. COMPUTE POINTS
+    # ---------------------------
+    home_points = df["FTR"].map({"H": 3, "D": 1, "A": 0})
+    away_points = df["FTR"].map({"A": 3, "D": 1, "H": 0})
 
-# 5. Preview key "Form" indicators
-print(leicester_form_data[['match_id', 'type.name', 'possession_team.name', 'shot.statsbomb_xg']].head())'''
+    # ---------------------------
+    # 4. ROLLING FORM OVER ALL MATCHES (HOME + AWAY)
+    # ---------------------------
+    home_records = df[["Date", "HomeTeam"]].copy()
+    home_records["Team"] = df["HomeTeam"]
+    home_records["Points"] = home_points.values
 
-# Define your local project data directory
-local_data_dir = "/home/jtshi/school/honours/PGM/hidden-regime-models/data"
-os.makedirs(local_data_dir, exist_ok=True)
+    away_records = df[["Date", "AwayTeam"]].copy()
+    away_records["Team"] = df["AwayTeam"]
+    away_records["Points"] = away_points.values
 
-# 1. Download the competitions map locally
-comp_path = kagglehub.dataset_download("saurabhshahane/statsbomb-football-data", path="data/competitions.json")
-shutil.copy(comp_path, os.path.join(local_data_dir, "competitions.json"))
+    all_records = pd.concat(
+        [home_records[["Date", "Team", "Points"]],
+         away_records[["Date", "Team", "Points"]]]
+    ).sort_values("Date").reset_index(drop=True)
 
-# 2. Download the PL 2015/16 match list locally
-match_path = kagglehub.dataset_download("saurabhshahane/statsbomb-football-data", path="data/matches/2/27.json")
-# Create the local folder structure
-os.makedirs(os.path.join(local_data_dir, "matches/2"), exist_ok=True)
-shutil.copy(match_path, os.path.join(local_data_dir, "matches/2/27.json"))
+    all_records["Form"] = (
+        all_records.groupby("Team")["Points"]
+        .rolling(5, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
 
-print(f"Essential files copied to: {local_data_dir}")
+    form_lookup = all_records.set_index(["Date", "Team"])["Form"]
+
+    home_form = pd.Index(zip(df["Date"], df["HomeTeam"])).map(form_lookup)
+    away_form = pd.Index(zip(df["Date"], df["AwayTeam"])).map(form_lookup)
+
+    # ---------------------------
+    # 5. CONCAT ALL NEW COLUMNS AT ONCE
+    # ---------------------------
+    new_cols = pd.DataFrame({
+        "HomePoints":   home_points.values,
+        "AwayPoints":   away_points.values,
+        "HomeForm":     home_form,
+        "AwayForm":     away_form,
+        "HomeForm_cat": pd.qcut(home_form, 3, labels=["low", "mid", "high"]),
+        "AwayForm_cat": pd.qcut(away_form, 3, labels=["low", "mid", "high"]),
+    }, index=df.index)
+
+    df = pd.concat([df, new_cols], axis=1)
+
+    # ---------------------------
+    # 6. DROP UNUSED COLUMNS & DEFRAG
+    # ---------------------------
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    df = df.copy()
+
+    return df
+
+def getOldera():
+    path = "../data/raw/"
+    seasons = [
+        '2000-01','2001-02','2002-03','2003-04','2004-05','2005-06',
+        '2006-07','2007-08','2008-09','2009-10','2010-11'
+    ]
+    drop_cols = ['AvgC<2.5', 'AHCh', 'B365CAHH', 'B365CAHA', 'PCAHH', 'PCAHA', 'MaxCAHH', 'MaxCAHA', 'AvgCAHH', 'AvgCAHA','AvgCH', 'AvgCD', 'AvgCA', 'B365C>2.5', 'B365C<2.5', 'PC>2.5', 'PC<2.5', 'MaxC>2.5', 'MaxC<2.5', 'AvgC>2.5','IWCA', 'WHCH', 'WHCD', 'WHCA', 'VCCH', 'VCCD', 'VCCA', 'MaxCH', 'MaxCD', 'MaxCA', 'AvgAHH', 'AvgAHA', 'B365CH', 'B365CD', 'B365CA', 'BWCH', 'BWCD', 'BWCA', 'IWCH', 'IWCD','Max<2.5', 'Avg>2.5', 'Avg<2.5', 'AHh', 'B365AHH', 'B365AHA', 'PAHH', 'PAHA', 'MaxAHH', 'MaxAHA','B365H', 'B365D', 'B365A', 'BWH', 'BWD', 'BWA', 'GBH', 'GBD', 'GBA', 'IWH', 'IWD', 'IWA', 'LBH', 'LBD', 'LBA', 'SBH', 'SBD', 'SBA', 'WHH', 'WHD', 'WHA', 'SJH', 'SJD', 'SJA', 'VCH', 'VCD', 'VCA', 'BSH', 'BSD', 'BSA', 'Bb1X2', 'BbMxH', 'BbAvH', 'BbMxD', 'BbAvD', 'BbMxA', 'BbAvA', 'BbOU', 'BbMx>2.5', 'BbAv>2.5', 'BbMx<2.5', 'BbAv<2.5', 'BbAH', 'BbAHh', 'BbMxAHH', 'BbAvAHH', 'BbMxAHA', 'BbAvAHA', 'PSH', 'PSD', 'PSA', 'PSCH', 'PSCD', 'PSCA', 'Time', 'MaxH', 'MaxD', 'MaxA', 'AvgH', 'AvgD', 'AvgA', 'B365>2.5', 'B365<2.5', 'P>2.5', 'P<2.5', 'Max>2.5','Season','Div','HTHG', 'HTAG','HTR','Referee','HST','AST','AHW','HHW','Attendance']
+
+    frames = []
+
+    # ---------------------------
+    # 1. LOAD DATA
+    # ---------------------------
+    for season in seasons:
+        try:
+            curr_df = pd.read_csv(f"{path}{season}.csv")
+            curr_df["Season"] = season
+            frames.append(curr_df)
+        except FileNotFoundError:
+            print(f"Missing: {season}")
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df = df.copy()  # defragment
+
+    # ---------------------------
+    # 2. PARSE DATE & SORT CHRONOLOGICALLY
+    # ---------------------------
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+    df = df.sort_values("Date").reset_index(drop=True)
+
+    # ---------------------------
+    # 3. COMPUTE POINTS
+    # ---------------------------
+    home_points = df["FTR"].map({"H": 3, "D": 1, "A": 0})
+    away_points = df["FTR"].map({"A": 3, "D": 1, "H": 0})
+
+    # ---------------------------
+    # 4. ROLLING FORM OVER ALL MATCHES (HOME + AWAY)
+    # ---------------------------
+    home_records = df[["Date", "HomeTeam"]].copy()
+    home_records["Team"] = df["HomeTeam"]
+    home_records["Points"] = home_points.values
+
+    away_records = df[["Date", "AwayTeam"]].copy()
+    away_records["Team"] = df["AwayTeam"]
+    away_records["Points"] = away_points.values
+
+    all_records = pd.concat(
+        [home_records[["Date", "Team", "Points"]],
+         away_records[["Date", "Team", "Points"]]]
+    ).sort_values("Date").reset_index(drop=True)
+
+    all_records["Form"] = (
+        all_records.groupby("Team")["Points"]
+        .rolling(5, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+    form_lookup = all_records.set_index(["Date", "Team"])["Form"]
+
+    home_form = pd.Index(zip(df["Date"], df["HomeTeam"])).map(form_lookup)
+    away_form = pd.Index(zip(df["Date"], df["AwayTeam"])).map(form_lookup)
+
+    # ---------------------------
+    # 5. CONCAT ALL NEW COLUMNS AT ONCE
+    # ---------------------------
+    new_cols = pd.DataFrame({
+        "HomePoints":   home_points.values,
+        "AwayPoints":   away_points.values,
+        "HomeForm":     home_form,
+        "AwayForm":     away_form,
+        "HomeForm_cat": pd.qcut(home_form, 3, labels=["low", "mid", "high"]),
+        "AwayForm_cat": pd.qcut(away_form, 3, labels=["low", "mid", "high"]),
+    }, index=df.index)
+
+    df = pd.concat([df, new_cols], axis=1)
+
+    # ---------------------------
+    # 6. DROP UNUSED COLUMNS & DEFRAG
+    # ---------------------------
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    df = df.copy()
+
+    return df
+
+def getNewEra():
+        path = "../data/raw/"
+        seasons = [
+            '2011-12',
+            '2012-13','2013-14','2014-15','2015-16','2016-17','2017-18',
+            '2018-19','2020-2021','2021-2022'
+        ]
+        drop_cols = ['AvgC<2.5', 'AHCh', 'B365CAHH', 'B365CAHA', 'PCAHH', 'PCAHA', 'MaxCAHH', 'MaxCAHA', 'AvgCAHH', 'AvgCAHA','AvgCH', 'AvgCD', 'AvgCA', 'B365C>2.5', 'B365C<2.5', 'PC>2.5', 'PC<2.5', 'MaxC>2.5', 'MaxC<2.5', 'AvgC>2.5','IWCA', 'WHCH', 'WHCD', 'WHCA', 'VCCH', 'VCCD', 'VCCA', 'MaxCH', 'MaxCD', 'MaxCA', 'AvgAHH', 'AvgAHA', 'B365CH', 'B365CD', 'B365CA', 'BWCH', 'BWCD', 'BWCA', 'IWCH', 'IWCD','Max<2.5', 'Avg>2.5', 'Avg<2.5', 'AHh', 'B365AHH', 'B365AHA', 'PAHH', 'PAHA', 'MaxAHH', 'MaxAHA','B365H', 'B365D', 'B365A', 'BWH', 'BWD', 'BWA', 'GBH', 'GBD', 'GBA', 'IWH', 'IWD', 'IWA', 'LBH', 'LBD', 'LBA', 'SBH', 'SBD', 'SBA', 'WHH', 'WHD', 'WHA', 'SJH', 'SJD', 'SJA', 'VCH', 'VCD', 'VCA', 'BSH', 'BSD', 'BSA', 'Bb1X2', 'BbMxH', 'BbAvH', 'BbMxD', 'BbAvD', 'BbMxA', 'BbAvA', 'BbOU', 'BbMx>2.5', 'BbAv>2.5', 'BbMx<2.5', 'BbAv<2.5', 'BbAH', 'BbAHh', 'BbMxAHH', 'BbAvAHH', 'BbMxAHA', 'BbAvAHA', 'PSH', 'PSD', 'PSA', 'PSCH', 'PSCD', 'PSCA', 'Time', 'MaxH', 'MaxD', 'MaxA', 'AvgH', 'AvgD', 'AvgA', 'B365>2.5', 'B365<2.5', 'P>2.5', 'P<2.5', 'Max>2.5','Season','Div','HTHG', 'HTAG','HTR','Referee','HST','AST','AHW','HHW','Attendance']
+
+        frames = []
+
+    # ---------------------------
+    # 1. LOAD DATA
+    # ---------------------------
+        for season in seasons:
+            try:
+                curr_df = pd.read_csv(f"{path}{season}.csv")
+                curr_df["Season"] = season
+                frames.append(curr_df)
+            except FileNotFoundError:
+                print(f"Missing: {season}")
+
+        if not frames:
+            return pd.DataFrame()
+
+        df = pd.concat(frames, ignore_index=True)
+        df = df.copy()  # defragment
+
+        # ---------------------------
+        # 2. PARSE DATE & SORT CHRONOLOGICALLY
+        # ---------------------------
+        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+        df = df.sort_values("Date").reset_index(drop=True)
+
+        # ---------------------------
+        # 3. COMPUTE POINTS
+        # ---------------------------
+        home_points = df["FTR"].map({"H": 3, "D": 1, "A": 0})
+        away_points = df["FTR"].map({"A": 3, "D": 1, "H": 0})
+
+        # ---------------------------
+        # 4. ROLLING FORM OVER ALL MATCHES (HOME + AWAY)
+        # ---------------------------
+        home_records = df[["Date", "HomeTeam"]].copy()
+        home_records["Team"] = df["HomeTeam"]
+        home_records["Points"] = home_points.values
+
+        away_records = df[["Date", "AwayTeam"]].copy()
+        away_records["Team"] = df["AwayTeam"]
+        away_records["Points"] = away_points.values
+
+        all_records = pd.concat(
+            [home_records[["Date", "Team", "Points"]],
+            away_records[["Date", "Team", "Points"]]]
+        ).sort_values("Date").reset_index(drop=True)
+
+        all_records["Form"] = (
+            all_records.groupby("Team")["Points"]
+            .rolling(5, min_periods=1)
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
+
+        form_lookup = all_records.set_index(["Date", "Team"])["Form"]
+
+        home_form = pd.Index(zip(df["Date"], df["HomeTeam"])).map(form_lookup)
+        away_form = pd.Index(zip(df["Date"], df["AwayTeam"])).map(form_lookup)
+
+        # ---------------------------
+        # 5. CONCAT ALL NEW COLUMNS AT ONCE
+        # ---------------------------
+        new_cols = pd.DataFrame({
+            "HomePoints":   home_points.values,
+            "AwayPoints":   away_points.values,
+            "HomeForm":     home_form,
+            "AwayForm":     away_form,
+            "HomeForm_cat": pd.qcut(home_form, 3, labels=["low", "mid", "high"]),
+            "AwayForm_cat": pd.qcut(away_form, 3, labels=["low", "mid", "high"]),
+        }, index=df.index)
+
+        df = pd.concat([df, new_cols], axis=1)
+
+        # ---------------------------
+        # 6. DROP UNUSED COLUMNS & DEFRAG
+        # ---------------------------
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+        df = df.copy()
+
+        return df
+
+
+if __name__ == "__main__":
+    df = getMatchData()
+    print(df.head(20))
